@@ -15,6 +15,7 @@
           </t-button>
           <div class="rightBtnList f nw">
             <t-button @click="oneClickToFillIn">{{ $t("settings.agent.oneClickFill") }}</t-button>
+            <t-button theme="primary" variant="outline" @click="openBatchConfig">批量切换模型</t-button>
           </div>
         </div>
       </div>
@@ -43,6 +44,13 @@
         </div>
       </t-tab-panel>
       <t-tab-panel :value="2" :label="$t('settings.agent.advanced')">
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: -8px;">
+          <t-popconfirm content="清空所有高级配置？清空后子 Agent 将继承简易配置中父级的模型设置。" @confirm="clearAllAdvanced">
+            <t-button theme="danger" variant="text" size="small" :loading="clearingAdvanced">
+              {{ clearingAdvanced ? '清空中…' : '清空所有配置' }}
+            </t-button>
+          </t-popconfirm>
+        </div>
         <div class="cardGrid">
           <t-card hoverShadow v-for="(item, index) in advancedModelData" :key="index" class="skillCard f" @click="startConfig(item, '高级')">
             <div class="skillCardHeader">
@@ -74,6 +82,57 @@
         </div>
       </t-tab-panel>
     </t-tabs>
+
+    <!-- 批量切换模型弹窗 -->
+    <t-dialog
+      v-model:visible="batchModelDataShow"
+      header="批量切换所有 Agent 的模型"
+      width="540px"
+      :on-confirm="confirmBatchConfig"
+      :on-close="() => (batchModelDataShow = false)"
+      :confirm-loading="batchApplying"
+      :confirm-btn="batchApplying ? '应用中…' : `应用到 ${batchTargetCount} 个 Agent`"
+      :cancel-btn="$t('settings.agent.cancel')">
+      <div class="dialogContent">
+        <t-form label-align="top" :label-width="70">
+          <t-form-item label="供应商 / 模型">
+            <modelSelect v-model="batchSelectValue" v-model:label="batchSelectLabel" type="text" />
+          </t-form-item>
+          <t-form-item label="影响范围">
+            <div style="font-size: 13px; color: var(--td-text-color-secondary); line-height: 1.6">
+              将把 <strong>{{ batchTargetCount }}</strong> 个 Agent（普通 {{ modelData.filter((m) => !m.disabled).length }} + 高级
+              {{ advancedModelData.filter((m) => !m.disabled).length }}）全部改成此模型。<br />
+              已禁用的 Agent（如 TTS 配音、导演规划）保持不变。
+            </div>
+          </t-form-item>
+          <t-form-item label="测试连通">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+              <t-button :disabled="!batchSelectValue || batchTesting" :loading="batchTesting" @click="testBatchModel">
+                测试一下（不会改动配置）
+              </t-button>
+              <t-tag v-if="batchTestStatus === 'success'" theme="success" variant="light" size="small">连通 ✓</t-tag>
+              <t-tag v-else-if="batchTestStatus === 'error'" theme="danger" variant="light" size="small">失败</t-tag>
+            </div>
+            <div
+              v-if="batchTestMsg"
+              :style="{
+                marginTop: '8px',
+                padding: '8px 10px',
+                borderRadius: '4px',
+                background: 'var(--td-bg-color-container-hover)',
+                fontSize: '12px',
+                lineHeight: '1.5',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxHeight: '120px',
+                overflow: 'auto',
+              }">
+              {{ batchTestMsg }}
+            </div>
+          </t-form-item>
+        </t-form>
+      </div>
+    </t-dialog>
 
     <!-- 模型配置弹窗 -->
     <t-dialog
@@ -308,6 +367,96 @@ interface VendorItem {
 
 const vendorList = ref<VendorItem[]>([]);
 
+// ── 批量切换模型 ──
+const batchModelDataShow = ref(false);
+const batchSelectValue = ref("");
+const batchSelectLabel = ref("");
+const batchTesting = ref(false);
+const batchTestStatus = ref<"" | "success" | "error">("");
+const batchTestMsg = ref("");
+const batchApplying = ref(false);
+const batchTargetCount = computed(
+  () => modelData.value.filter((m) => !m.disabled).length + advancedModelData.value.filter((m) => !m.disabled).length,
+);
+function openBatchConfig() {
+  batchSelectValue.value = "";
+  batchSelectLabel.value = "";
+  batchTestStatus.value = "";
+  batchTestMsg.value = "";
+  batchModelDataShow.value = true;
+}
+async function testBatchModel() {
+  if (!batchSelectValue.value) return;
+  const [vendorId, modelName] = batchSelectValue.value.split(/:(.+)/);
+  if (!vendorId || !modelName) {
+    batchTestStatus.value = "error";
+    batchTestMsg.value = "未选择有效的模型";
+    return;
+  }
+  batchTesting.value = true;
+  batchTestStatus.value = "";
+  batchTestMsg.value = "";
+  try {
+    const res: any = await axios.post("/setting/vendorConfig/modelTest", {
+      modelName,
+      type: "text",
+      id: vendorId,
+    });
+    batchTestStatus.value = "success";
+    const reply = typeof res?.data === "string" ? res.data : JSON.stringify(res?.data);
+    batchTestMsg.value = `模型回复（前 200 字）：${(reply || "").slice(0, 200)}`;
+  } catch (err: any) {
+    batchTestStatus.value = "error";
+    batchTestMsg.value = err?.message || String(err);
+  } finally {
+    batchTesting.value = false;
+  }
+}
+async function confirmBatchConfig() {
+  if (!batchSelectValue.value) {
+    window.$message.warning("请先选择一个模型");
+    return;
+  }
+  const [vendorId] = batchSelectValue.value.split(/:(.+)/);
+  if (!vendorId) {
+    window.$message.error("无法解析供应商");
+    return;
+  }
+  const targets = [...modelData.value, ...advancedModelData.value].filter((a) => !a.disabled);
+  if (!targets.length) {
+    window.$message.warning("没有可配置的 Agent");
+    return;
+  }
+  batchApplying.value = true;
+  let ok = 0;
+  let fail = 0;
+  for (const agent of targets) {
+    try {
+      await axios.post("/setting/agentDeploy/deployAgentModel", {
+        id: agent.id,
+        name: agent.name,
+        model: batchSelectLabel.value || batchSelectValue.value.split(/:(.+)/)[1],
+        modelName: batchSelectValue.value,
+        vendorId,
+        desc: agent.desc,
+        temperature: agent.temperature ?? 1,
+        maxOutputTokens: agent.maxOutputTokens ?? 0,
+      });
+      ok += 1;
+    } catch (err: any) {
+      fail += 1;
+    }
+  }
+  batchApplying.value = false;
+  if (fail === 0) {
+    window.$message.success(`已批量配置 ${ok} 个 Agent`);
+  } else {
+    window.$message.warning(`成功 ${ok} 个，失败 ${fail} 个`);
+  }
+  await getAgentDeploy();
+  batchModelDataShow.value = false;
+}
+
 async function getVendorList() {
   try {
     const res = await axios.post("/setting/vendorConfig/getVendorList");
@@ -323,6 +472,42 @@ async function getVendorList() {
 }
 //高级配置
 const advancedModelData = ref<ModelType[]>([]);
+const clearingAdvanced = ref(false);
+
+async function clearAllAdvanced() {
+  const targets = advancedModelData.value.filter((a) => !a.disabled);
+  if (!targets.length) {
+    window.$message.warning("没有可清空的高级 Agent");
+    return;
+  }
+  clearingAdvanced.value = true;
+  let ok = 0;
+  let fail = 0;
+  for (const agent of targets) {
+    try {
+      await axios.post("/setting/agentDeploy/deployAgentModel", {
+        id: agent.id,
+        name: agent.name,
+        model: "",
+        modelName: "",
+        vendorId: null,
+        desc: agent.desc,
+        temperature: 0,
+        maxOutputTokens: 0,
+      });
+      ok += 1;
+    } catch {
+      fail += 1;
+    }
+  }
+  clearingAdvanced.value = false;
+  if (fail === 0) {
+    window.$message.success(`已清空 ${ok} 个高级 Agent 配置`);
+  } else {
+    window.$message.warning(`成功 ${ok} 个，失败 ${fail} 个`);
+  }
+  await getAgentDeploy();
+}
 </script>
 
 <style lang="scss" scoped>

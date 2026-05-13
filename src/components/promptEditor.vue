@@ -108,11 +108,11 @@ function createRefTag(index: number): HTMLSpanElement {
   return container;
 }
 
-// 将 prompt 文本渲染到编辑器，处理 @图N 为标签，\n 为 <br>
+// 将 prompt 文本渲染到编辑器，处理 @图N / @参考N 为标签，\n 为 <br>
 function renderPromptToEditor(text: string) {
   if (!editorRef.value) return;
   editorRef.value.innerHTML = "";
-  const regex = /@图(\d+)|\n/g;
+  const regex = /@(?:图|参考)(\d+)|\n/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {

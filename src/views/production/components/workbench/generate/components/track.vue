@@ -255,6 +255,7 @@ function batchGenText() {
           trackId,
           info,
           model: props.modelParmas.model,
+          mode: props.modelParmas.mode,
         });
         const targetTrack = trackList.value.find((item) => item.id === trackId);
         if (targetTrack) targetTrack.prompt = data;
